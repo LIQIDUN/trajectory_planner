@@ -1,0 +1,15 @@
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 编译产生的临时文件 (以防万一)
+build/
+devel/
+*.egg-info/
+
+# IDE 配置文件 (可选，如果你不想上传 VSCode 配置)
+.vscode/
+
+# 临时文件
+*~
+*.swp
