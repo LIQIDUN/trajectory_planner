@@ -6,7 +6,7 @@ import math
 class MinSnapOptimizer:
     def __init__(self):
         # 平均速度 (m/s)
-        self.avg_vel = 1.0 
+        self.avg_vel = 0.1 
 
     def optimize(self, waypoints_raw):
         """
@@ -14,7 +14,7 @@ class MinSnapOptimizer:
         return: 平滑后的密集轨迹点
         """
         if len(waypoints_raw) < 2:
-            return waypoints_raw
+            return waypoints_raw, None, None, None, None
 
         # --- 步骤 1: 关键！路径稀疏化 ---
         # 只保留拐点，去掉共线的中间点，解决数值不稳定问题
@@ -24,7 +24,7 @@ class MinSnapOptimizer:
 
         # 如果简化后只剩起点终点，直接返回直线插值
         if len(waypoints) < 2:
-            return waypoints
+            return waypoints, None, None, None, None
 
         # --- 步骤 2: 时间分配 ---
         n_segments = len(waypoints) - 1
@@ -44,7 +44,7 @@ class MinSnapOptimizer:
         # 检查是否求解失败
         if traj_x is None or traj_y is None or traj_z is None:
             rospy.logerr("MinSnap Solver Failed! Returning raw path.")
-            return waypoints
+            return waypoints, None, None, None, None
 
         # --- 步骤 4: 采样生成显示点 ---
         dense_path = []
@@ -63,7 +63,7 @@ class MinSnapOptimizer:
                 dense_path.append((px, py, pz))
                 
         dense_path.append(waypoints[-1])
-        return dense_path
+        return dense_path, traj_x, traj_y, traj_z, durations
 
     def simplify_waypoints(self, path):
         """
