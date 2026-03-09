@@ -1,0 +1,25 @@
+<launch>
+    <!-- 必须设为 false，防止时间倒流报错 -->
+    <param name="/use_sim_time" value="false" />
+
+    <!-- 1. MAVROS 连你测试成功的 14550 端口 -->
+    <include file="$(find mavros)/launch/apm.launch">
+        <arg name="fcu_url" value="udp://127.0.0.1:14550@" />
+        <arg name="gcs_url" value="" />
+    </include>
+
+    <!-- 关闭 MAVROS 自带的 TF（因为它带延迟会引起抖动），让我们的 Python 脚本来发 -->
+    <param name="/mavros/local_position/tf/send" value="false" />
+
+    <!-- 2. 加载 URDF 飞机模型 -->
+    <param name="robot_description" textfile="$(find trajectory_planner)/urdf/quad_tilt.urdf" />
+    
+    <!-- 3. 启动刚才写好的 Python 脚本 -->
+    <node pkg="trajectory_planner" type="rviz_visualizer_node.py" name="rviz_visualizer" output="screen" />
+
+    <!-- 4. 启动 robot_state_publisher (渲染 3D 模型必须的节点) -->
+    <node pkg="robot_state_publisher" type="robot_state_publisher" name="robot_state_publisher" />
+
+    <!-- 5. 启动 RViz -->
+    <!-- <node pkg="rviz" type="rviz" name="rviz" output="screen" /> -->
+</launch>

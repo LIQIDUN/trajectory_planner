@@ -1,0 +1,8 @@
+<launch>
+    
+    <node pkg="trajectory_planner" type="planner_main_node.py" name="upper_planner" output="screen">
+        <!-- 如果以后有参数（比如飞行半径），可以在这里配置 -->
+        
+    </node>
+
+</launch>

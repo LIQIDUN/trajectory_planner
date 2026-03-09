@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot name="quadtilt">
+  <!-- base_link 是 MAVROS 默认发布的无人机中心坐标系 -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <!-- 把这里的路径换成你自己的 3D 模型存放路径 -->
+        <!-- 如果不在 ROS 包里，也可以写绝对路径，比如 file:///home/user/.../mesh.dae -->
+        <mesh filename="file:///home/liqidun/github/ardupilot_gazebo/models/quadtilt/meshes/base_link.STL" scale="1 1 1"/>
+      </geometry>
+    </visual>
+  </link>
+</robot>

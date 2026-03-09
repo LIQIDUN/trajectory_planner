@@ -6,7 +6,7 @@ import math
 class MinSnapOptimizer:
     def __init__(self):
         # 平均速度 (m/s)
-        self.avg_vel = 0.1 
+        self.avg_vel = 0.5 
 
     def optimize(self, waypoints_raw):
         """
