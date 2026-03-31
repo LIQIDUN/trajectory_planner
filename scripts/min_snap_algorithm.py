@@ -2,6 +2,7 @@
 import numpy as np
 import rospy
 import math
+from scipy.optimize import minimize, LinearConstraint
 
 class MinSnapOptimizer:
     def __init__(self):
@@ -23,8 +24,8 @@ class MinSnapOptimizer:
         rospy.loginfo(f"Path Optimized: Raw {len(waypoints_raw)} -> Simplified {len(waypoints)} waypoints")
 
         # 如果简化后只剩起点终点，直接返回直线插值
-        if len(waypoints) < 2:
-            return waypoints, None, None, None, None
+        # if len(waypoints) < 2:
+        #     return waypoints, None, None, None, None
 
         # --- 步骤 2: 时间分配 ---
         n_segments = len(waypoints) - 1
@@ -37,10 +38,15 @@ class MinSnapOptimizer:
         
         # --- 步骤 3: Minimum Jerk (5阶) 闭式求解 ---
         # 针对 X, Y, Z 三轴分别求解
-        traj_x = self.solve_axis(waypoints, durations, 0)
-        traj_y = self.solve_axis(waypoints, durations, 1)
-        traj_z = self.solve_axis(waypoints, durations, 2)
-        
+        # traj_x = self.solve_axis(waypoints, durations, 0)
+        # traj_y = self.solve_axis(waypoints, durations, 1)
+        # traj_z = self.solve_axis(waypoints, durations, 2)
+
+        traj_x = self.solve_axis_corridor(waypoints, durations, 0)
+        traj_y = self.solve_axis_corridor(waypoints, durations, 1)
+        traj_z = self.solve_axis_corridor(waypoints, durations, 2)
+
+
         # 检查是否求解失败
         if traj_x is None or traj_y is None or traj_z is None:
             rospy.logerr("MinSnap Solver Failed! Returning raw path.")
@@ -109,7 +115,7 @@ class MinSnapOptimizer:
         dim = n_seg * n_coef
         A = np.zeros((dim, dim))
         b = np.zeros(dim)
-        
+        # 行
         row = 0
         
         # ==========================
@@ -195,6 +201,154 @@ class MinSnapOptimizer:
         for i in range(n_seg):
             coeffs.append(x[i*n_coef : (i+1)*n_coef])
         return coeffs
+    
+    def solve_axis_corridor(self, waypoints, durations, axis, corridor_radius=0.2):
+        """
+        带飞行走廊约束的 Minimum Jerk 轨迹优化
+        :param waypoints: 路径点列表
+        :param durations: 每段的时间
+        :param axis: 当前计算的轴 (0:x, 1:y, 2:z)
+        :param corridor_radius: 允许偏离 Waypoint 的最大半径 (走廊宽度)
+        :return: 多项式系数列表
+        """
+        n_seg = len(durations)
+        n_coef = 6 # Minimum Jerk (5阶多项式) -> c0, c1, c2, c3, c4, c5
+        dim = n_seg * n_coef
+
+        # ==========================
+        # 1. 构建目标函数代价矩阵 Q (Minimize Jerk)
+        # ==========================
+        Q = np.zeros((dim, dim))
+        for i in range(n_seg):
+            T = durations[i]
+            idx = i * n_coef
+            # 5阶多项式 Jerk 平方积分的解析解矩阵
+            Q[idx+3, idx+3] = 36 * T
+            Q[idx+3, idx+4] = Q[idx+4, idx+3] = 72 * T**2
+            Q[idx+3, idx+5] = Q[idx+5, idx+3] = 120 * T**3
+            Q[idx+4, idx+4] = 192 * T**3
+            Q[idx+4, idx+5] = Q[idx+5, idx+4] = 360 * T**4
+            Q[idx+5, idx+5] = 720 * T**5
+
+        # 优化目标: min x^T Q x
+        def cost_func(x):
+            return x.T @ Q @ x
+        
+        # 雅可比矩阵 (梯度)，提供给求解器加速收敛
+        def jacobian(x):
+            return 2 * Q @ x
+
+        # ==========================
+        # 2. 等式约束 A_eq * x = b_eq
+        # ==========================
+        A_eq, b_eq = [], []
+
+        # (1) 起点强约束 (起始点一般不允许误差)
+        row = np.zeros(dim); row[0] = 1; A_eq.append(row); b_eq.append(waypoints[0][axis]) # p0
+        row = np.zeros(dim); row[1] = 1; A_eq.append(row); b_eq.append(0)                 # v0 = 0
+        row = np.zeros(dim); row[2] = 2; A_eq.append(row); b_eq.append(0)                 # a0 = 0
+
+        # (2) 终点强约束 (终点一般也不允许误差)
+        T_last = durations[-1]
+        last_idx = (n_seg - 1) * n_coef
+        row = np.zeros(dim); 
+        for j in range(n_coef): row[last_idx + j] = T_last**j
+        A_eq.append(row); b_eq.append(waypoints[-1][axis])                                # p_end
+
+        row = np.zeros(dim); 
+        for j in range(1, n_coef): row[last_idx + j] = j * T_last**(j-1)
+        A_eq.append(row); b_eq.append(0)                                                  # v_end = 0
+
+        row = np.zeros(dim); 
+        for j in range(2, n_coef): row[last_idx + j] = j*(j-1) * T_last**(j-2)
+        A_eq.append(row); b_eq.append(0)                                                  # a_end = 0
+
+        # (3) 段与段之间的连续性约束 (P, V, A, J, S 必须连续)
+        for i in range(n_seg - 1):
+            T = durations[i]
+            idx1 = i * n_coef
+            idx2 = (i + 1) * n_coef
+
+            # Pos连续: p_i(T) - p_{i+1}(0) = 0
+            row = np.zeros(dim)
+            for j in range(n_coef): row[idx1 + j] = T**j
+            row[idx2 + 0] = -1
+            A_eq.append(row); b_eq.append(0)
+
+            # Vel连续
+            row = np.zeros(dim)
+            for j in range(1, n_coef): row[idx1 + j] = j * T**(j-1)
+            row[idx2 + 1] = -1
+            A_eq.append(row); b_eq.append(0)
+
+            # Acc连续
+            row = np.zeros(dim)
+            for j in range(2, n_coef): row[idx1 + j] = j*(j-1) * T**(j-2)
+            row[idx2 + 2] = -2
+            A_eq.append(row); b_eq.append(0)
+
+            # Jerk连续
+            row = np.zeros(dim)
+            for j in range(3, n_coef): row[idx1 + j] = j*(j-1)*(j-2) * T**(j-3)
+            row[idx2 + 3] = -6
+            A_eq.append(row); b_eq.append(0)
+
+            # Snap连续
+            row = np.zeros(dim)
+            for j in range(4, n_coef): row[idx1 + j] = j*(j-1)*(j-2)*(j-3) * T**(j-4)
+            row[idx2 + 4] = -24
+            A_eq.append(row); b_eq.append(0)
+
+        # ==========================
+        # 3. 不等式约束: 飞行走廊 (Soft Constraint)
+        # ==========================
+        # lb <= A_ieq * x <= ub
+        A_ieq, lb_ieq, ub_ieq = [], [], []
+
+        for i in range(n_seg - 1):
+            T = durations[i]
+            idx = i * n_coef
+            
+            # 提取第 i 段的终点位置 p_i(T)
+            row = np.zeros(dim)
+            for j in range(n_coef): row[idx + j] = T**j
+            A_ieq.append(row)
+            
+            # 走廊约束: Waypoint - radius <= p_i(T) <= Waypoint + radius
+            wpt = waypoints[i+1][axis]
+            lb_ieq.append(wpt - corridor_radius)
+            ub_ieq.append(wpt + corridor_radius)
+
+        # ==========================
+        # 4. 组合约束并求解
+        # ==========================
+        A_eq = np.array(A_eq); b_eq = np.array(b_eq)
+        constraints = [LinearConstraint(A_eq, b_eq, b_eq)] # 等式约束下限等于上限
+        
+        if len(A_ieq) > 0:
+            A_ieq = np.array(A_ieq)
+            lb_ieq = np.array(lb_ieq)
+            ub_ieq = np.array(ub_ieq)
+            constraints.append(LinearConstraint(A_ieq, lb_ieq, ub_ieq))
+
+        # 初始猜测值设为 0
+        x0 = np.zeros(dim)
+
+        # 使用 SLSQP 算法求解二次规划问题
+        res = minimize(cost_func, x0, jac=jacobian, constraints=constraints, 
+                       method='SLSQP', options={'disp': False, 'maxiter': 500})
+
+        if not res.success:
+            print(f"轴 {axis} 优化失败: {res.message}")
+            return None
+            
+        # 提取结果
+        coeffs = []
+        for i in range(n_seg):
+            coeffs.append(res.x[i*n_coef : (i+1)*n_coef])
+            
+        return coeffs
+
 
     def poly_eval(self, coeffs, t):
         val = 0
